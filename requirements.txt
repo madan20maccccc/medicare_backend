@@ -4,6 +4,6 @@ transformers
 torch
 numpy
 word2number
-spellchecker
+pyspellchecker
 rapidfuzz
 # If you find any other imports used in main.py that cause errors, add them here.

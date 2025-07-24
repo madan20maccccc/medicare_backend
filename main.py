@@ -21,7 +21,7 @@ from transformers import (
 import numpy as np
 import torch
 from word2number import w2n
-from spellchecker import SpellChecker
+from pyspellchecker import SpellChecker
 from rapidfuzz import fuzz
 
 # --- FastAPI App Initialization ---
