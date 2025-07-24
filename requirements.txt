@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+transformers
+torch
+numpy
+word2number
+spellchecker
+rapidfuzz
+# If you find any other imports used in main.py that cause errors, add them here.
