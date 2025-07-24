@@ -4,6 +4,6 @@ transformers
 torch
 numpy
 word2number
-pyspellchecker
+textblob          # <--- NEW: For spell correction
+textblob-fr       # <--- NEW: For TextBlob's data
 rapidfuzz
-# If you find any other imports used in main.py that cause errors, add them here.

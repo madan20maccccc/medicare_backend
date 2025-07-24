@@ -2,7 +2,11 @@
 # This file combines functionalities from app.py (Flask) and backend_app.py (FastAPI)
 # into a single FastAPI application.
 # It prioritizes backend_app.py's logic for medicine extraction and suggestion,
-# while integrating app.py's NER, summarization, and grammar/spell correction.
+# while integrating app.py's NER and summarization.
+#
+# IMPORTANT CHANGES:
+# 1. Switched spellchecker library to 'TextBlob' for better compatibility on Render.
+# 2. Removed the 'Grammar Correction' model entirely to reduce memory usage for Render's free tier.
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,7 +25,9 @@ from transformers import (
 import numpy as np
 import torch
 from word2number import w2n
-from pyspellchecker import SpellChecker
+# Changed from spellchecker/pyspellchecker to TextBlob
+from textblob import TextBlob
+# You also need to install the TextBlob data: python -m textblob.download_corpora
 from rapidfuzz import fuzz
 
 # --- FastAPI App Initialization ---
@@ -42,9 +48,6 @@ app.add_middleware(
 
 # --- Global Variables and Model/Data Loading ---
 
-# Initialize spell checker (from app.py)
-spell = SpellChecker()
-
 # Device configuration (from both app.py and backend_app.py)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -53,8 +56,7 @@ print(f"Using device: {device}")
 ner_tokenizer = None
 ner_model = None
 ner_pipeline = None
-grammar_tokenizer = None
-grammar_model = None
+# Removed grammar_tokenizer and grammar_model to save memory
 summary_tokenizer = None
 summary_model = None
 summary_pipeline = None
@@ -82,7 +84,7 @@ NUMBER_WORDS = {
 @app.on_event("startup")
 async def load_all_models_and_data():
     global ner_tokenizer, ner_model, ner_pipeline
-    global grammar_tokenizer, grammar_model
+    # Removed global grammar_tokenizer, grammar_model
     global summary_tokenizer, summary_model, summary_pipeline
     global LOADED_MEDICINE_NAMES, LOADED_MEDICINE_NAMES_LOWER_SET
 
@@ -110,16 +112,16 @@ async def load_all_models_and_data():
         ner_model = None
         ner_pipeline = None
 
-    # --- Load Grammar Correction model (from app.py) ---
-    grammar_model_name = "vennify/t5-base-grammar-correction"
-    print(f"Loading Grammar Correction model: {grammar_model_name}...")
-    try:
-        grammar_tokenizer = AutoTokenizer.from_pretrained(grammar_model_name)
-        grammar_model = AutoModelForSeq2SeqLM.from_pretrained(grammar_model_name).to(device)
-        print("SUCCESS: Grammar Correction model loaded.")
-    except Exception as e:
-        print(f"ERROR: Failed to load Grammar Correction model: {e}")
-        raise RuntimeError(f"Failed to load Grammar Correction model: {e}")
+    # --- Removed Grammar Correction model loading to save memory ---
+    # grammar_model_name = "vennify/t5-base-grammar-correction"
+    # print(f"Loading Grammar Correction model: {grammar_model_name}...")
+    # try:
+    #     grammar_tokenizer = AutoTokenizer.from_pretrained(grammar_model_name)
+    #     grammar_model = AutoModelForSeq2SeqLM.from_pretrained(grammar_model_name).to(device)
+    #     print("SUCCESS: Grammar Correction model loaded.")
+    # except Exception as e:
+    #     print(f"ERROR: Failed to load Grammar Correction model: {e}")
+    #     raise RuntimeError(f"Failed to load Grammar Correction model: {e}")
 
     # --- Load Abstractive Summarization Model (from app.py) ---
     summary_model_name = "t5-base"
@@ -239,28 +241,25 @@ def convert_to_serializable(obj):
         return obj.tolist()
     return obj
 
-# Spell Correction (from app.py)
+# Spell Correction (Using TextBlob - REPLACED OLD SPELLCHECKER)
 def spell_correct_text(text):
-    """Corrects common spelling mistakes in the input text."""
-    words = text.split()
-    corrected_words = []
-    for word in words:
-        correction = spell.correction(word)
-        corrected_words.append(correction if correction is not None else word)
-    return " ".join(corrected_words)
-
-# Grammar correction step (from app.py)
-def grammar_correct(text):
-    """
-    Corrects grammar of the input text using the loaded T5-based model.
-    """
-    if not grammar_tokenizer or not grammar_model:
-        raise RuntimeError("Grammar Correction model not initialized.")
-    input_text = f"grammar: {text}"
-    input_ids = grammar_tokenizer.encode(input_text, return_tensors="pt").to(device)
-    outputs = grammar_model.generate(input_ids, max_length=128, num_beams=4, early_stopping=True)
-    corrected_text = grammar_tokenizer.decode(outputs[0], skip_special_tokens=True)
+    """Corrects common spelling mistakes in the input text using TextBlob."""
+    blob = TextBlob(text)
+    corrected_text = str(blob.correct())
     return corrected_text
+
+# Removed grammar_correct function entirely to save memory.
+# def grammar_correct(text):
+#     """
+#     Corrects grammar of the input text using the loaded T5-based model.
+#     """
+#     if not grammar_tokenizer or not grammar_model:
+#         raise RuntimeError("Grammar Correction model not initialized.")
+#     input_text = f"grammar: {text}"
+#     input_ids = grammar_tokenizer.encode(input_text, return_tensors="pt").to(device)
+#     outputs = grammar_model.generate(input_ids, max_length=128, num_beams=4, early_stopping=True)
+#     corrected_text = grammar_tokenizer.decode(outputs[0], skip_special_tokens=True)
+#     return corrected_text
 
 # Normalize Number Words (from app.py)
 def normalize_number_words(text):
@@ -472,7 +471,6 @@ def _extract_medicines(text: str) -> List[Dict]:
         similarity_score = fuzz.ratio(text_lower, original_feedback_text_lower)
         if similarity_score > 90:
             print(f"DEBUG: Found highly similar input in learned feedback (score: {similarity_score}). Returning corrected data.")
-            # Ensure the returned data is in dictionary format
             return [med.model_dump() if hasattr(med, 'model_dump') else med for med in feedback_entry['corrected_medicines']]
 
     # 2. If no direct feedback match, proceed with NER model (or fallback)
@@ -495,7 +493,6 @@ def _extract_medicines_with_biobert(text: str) -> List[Dict]:
     identified_medicine_names = set()
 
     for entity in ner_results:
-        # 'entity_group' is from raw NER, but `_merge_ner_tokens` maps it to 'entity'
         if entity['entity'] in ['Chemical', 'CHEMICAL', 'DRUG', 'MEDICINE', 'COMPOUND', 'Medication']:
             potential_med_name = entity['word'].strip()
             print(f"DEBUG: Potential medicine recognized by NER model: '{potential_med_name}' (Entity Group: {entity['entity']})")
@@ -657,27 +654,27 @@ async def home():
 @app.post("/ner", response_model=NERResponse)
 async def extract_entities_api(request_data: MedicineRequest):
     """
-    Processes input text to apply spell/grammar correction, extract entities,
+    Processes input text to apply spell correction, extract entities,
     and generate a structured medical summary.
     This endpoint integrates logic from the original app.py's /ner route.
     """
-    if not ner_pipeline or not grammar_tokenizer or not grammar_model or not summary_pipeline:
-        raise HTTPException(status_code=500, detail="One or more models not initialized on backend. Check server logs.")
+    # Removed grammar_tokenizer and grammar_model from this check
+    if not ner_pipeline or not summary_pipeline:
+        raise HTTPException(status_code=500, detail="One or more core models (NER/Summarization) not initialized on backend. Check server logs.")
 
     try:
         text = request_data.text.strip()
         if not text:
             raise HTTPException(status_code=400, detail="Missing or empty 'text' field")
 
-        # --- Step 1: Pre-processing (Spell Check -> Grammar Correction -> Number Word Normalization) ---
-        spell_checked_text = spell_correct_text(text)
-        print(f"[INFO] Spell-Corrected Text: {spell_checked_text}")
+        # --- Step 1: Pre-processing (Spell Check -> Number Word Normalization) ---
+        # Grammar correction step removed to save memory.
+        spell_corrected_text = spell_correct_text(text)
+        print(f"[INFO] Spell-Corrected Text: {spell_corrected_text}")
         
-        grammar_corrected_text = grammar_correct(spell_checked_text)
-        print(f"[INFO] Grammar-Corrected Text: {grammar_corrected_text}")
-
         # Normalize number words before NER and summarization
-        processed_text_for_models = normalize_number_words(grammar_corrected_text)
+        # Directly use spell_corrected_text as grammar correction is removed
+        processed_text_for_models = normalize_number_words(spell_corrected_text)
         print(f"[INFO] Normalized Number Words Text: {processed_text_for_models}")
 
         # --- Step 2: Named Entity Recognition (NER) using BioBERT ---
@@ -700,9 +697,7 @@ async def extract_entities_api(request_data: MedicineRequest):
         if "check your body temperature" in processed_text_for_models.lower() and "body temperature check" not in extracted_tests_procedures:
             extracted_tests_procedures.append("Body temperature check")
 
-        # --- IMPORTANT CHANGE FOR MEDICINE EXTRACTION ---
-        # Instead of app.py's original medication parsing, we use the _extract_medicines
-        # function from backend_app.py's logic, which includes feedback and more robust regex.
+        # --- IMPORTANT: Medication Extraction using backend_app.py's robust logic ---
         medication_prescriptions = _extract_medicines(processed_text_for_models)
         print(f"[DEBUG] Medication Prescriptions (from _extract_medicines): {medication_prescriptions}")
         
@@ -812,8 +807,7 @@ async def feedback_extraction(feedback: FeedbackRequest):
     Receives feedback on extracted medicines to 'learn' from user corrections.
     This data is stored in-memory for demonstration.
     """
-    # Use model_dump() for Pydantic v2, or .dict() for Pydantic v1, to convert to dict
-    LEARNED_FEEDBACK.append(feedback.model_dump())
+    LEARNED_FEEDBACK.append(feedback.model_dump()) # Use model_dump() for Pydantic v2
     print(f"DEBUG: Received feedback. Current learned feedback count: {len(LEARNED_FEEDBACK)}")
     print(f"DEBUG: Stored feedback for original text (first 50 chars): {feedback.original_text[:50]}...")
     return {"message": "Feedback received and stored conceptually."}
